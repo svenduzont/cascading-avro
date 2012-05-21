@@ -66,7 +66,8 @@ import cascading.tuple.Fields;
 public class LocalAvroScheme
         extends
         AvroSchemeBase<Properties, InputStream, OutputStream, DataFileStream<Record>, DataFileWriter<Record>> {
-    private static final long serialVersionUID = -6846529256253231806L;
+
+    private static final long serialVersionUID = 904972401237236251L;
 
     public LocalAvroScheme(Schema dataSchema) {
         super(dataSchema);
