@@ -1,6 +1,6 @@
 /*
-* Copyright (c) 2012 MaxPoint Interactive, Inc. All Rights Reserved.
-*
+ * Copyright (c) 2012 MaxPoint Interactive, Inc. All Rights Reserved.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -12,119 +12,110 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-*/
+ */
 package com.maxpoint.cascading.avro;
 
-import cascading.tap.Tap;
-import cascading.tuple.Fields;
-import cascading.tuple.Tuple;
-import cascading.tuple.TupleEntry;
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+
 import org.apache.avro.Schema;
 import org.apache.avro.file.DataFileConstants;
-import org.apache.avro.generic.GenericFixed;
-import org.apache.avro.generic.IndexedRecord;
+import org.apache.avro.file.DataFileStream;
+import org.apache.avro.generic.GenericData.Record;
 import org.apache.avro.mapred.AvroInputFormat;
 import org.apache.avro.mapred.AvroJob;
 import org.apache.avro.mapred.AvroOutputFormat;
 import org.apache.avro.mapred.AvroSerialization;
 import org.apache.avro.mapred.AvroWrapper;
-import org.apache.avro.specific.SpecificData;
-import org.apache.hadoop.io.BytesWritable;
+import org.apache.avro.reflect.ReflectDatumReader;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputCollector;
+import org.apache.hadoop.mapred.RecordReader;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.Collection;
-import java.util.EnumSet;
-import java.util.LinkedHashMap;
+import cascading.flow.FlowProcess;
+import cascading.scheme.SinkCall;
+import cascading.scheme.SourceCall;
+import cascading.tap.CompositeTap;
+import cascading.tap.Tap;
+import cascading.tuple.Fields;
 
 /**
- * Cascading scheme for reading data serialized using Avro. This scheme sources and sinks tuples with fields named
- * and ordered the same was as the Avro schema used in the constructor.
+ * Cascading scheme for reading data serialized using Avro. This scheme sources
+ * and sinks tuples with fields named and ordered the same was as the Avro
+ * schema used in the constructor.
  * <p>
  * The following Avro types are supported:
  * <ul>
- *     <li>boolean</li>
- *     <li>bytes (as BytesWritable)</li>
- *     <li>double</li>
- *     <li>fixed (as BytesWritable)</li>
- *     <li>float</li>
- *     <li>int</li>
- *     <li>long</li>
- *     <li>null</li>
- *     <li>string</li>
- *     <li>union of [type, null], treated as nullable value of the type</li>
+ * <li>boolean</li>
+ * <li>bytes (as BytesWritable)</li>
+ * <li>double</li>
+ * <li>fixed (as BytesWritable)</li>
+ * <li>float</li>
+ * <li>int</li>
+ * <li>long</li>
+ * <li>null</li>
+ * <li>string</li>
+ * <li>array</li>
+ * <li>map</li>
+ * <li>union of [type, null], treated as nullable value of the type</li>
  * </ul>
  */
-@SuppressWarnings("deprecation")
-public class AvroScheme extends AvroSchemeBase {
-    public static final EnumSet<Schema.Type> ALLOWED_TYPES = EnumSet.of(Schema.Type.BOOLEAN, Schema.Type.BYTES,
-            Schema.Type.DOUBLE, Schema.Type.FIXED, Schema.Type.FLOAT, Schema.Type.INT, Schema.Type.LONG,
-            Schema.Type.NULL, Schema.Type.STRING, Schema.Type.UNION);
 
-    private Schema dataSchema;
-    private FieldType[] fieldTypes;
-    private transient IndexedRecord cached;
-    
+public class AvroScheme
+        extends
+        AvroSchemeBase<JobConf, RecordReader<AvroWrapper<Record>, Writable>, OutputCollector<AvroWrapper<Record>, Writable>, Object[], Object> {
+
+    private static final long serialVersionUID = -6846529256253231806L;
+
     public AvroScheme(Schema dataSchema) {
-        this.dataSchema = dataSchema;
-        final LinkedHashMap<String, FieldType> schemaFields = parseSchema(dataSchema, ALLOWED_TYPES);
+        super(dataSchema);
+    }
 
-        final Fields fields = fields(schemaFields);
-        setSinkFields(fields);
-        setSourceFields(fields);
-
-        final Collection<FieldType> types = schemaFields.values();
-        fieldTypes = types.toArray(new FieldType[types.size()]); 
+    public AvroScheme() {
     }
 
     @Override
-    public void sourceInit(Tap tap, JobConf conf) throws IOException {
+    public void sourceConfInit(
+            FlowProcess<JobConf> process,
+            Tap<JobConf, RecordReader<AvroWrapper<Record>, Writable>, OutputCollector<AvroWrapper<Record>, Writable>> tap,
+            JobConf conf) {
+        if (dataSchema == null)
+            retrieveSchema(process, tap);
         conf.set(AvroJob.INPUT_SCHEMA, dataSchema.toString());
         conf.setInputFormat(AvroInputFormat.class);
         addAvroSerialization(conf);
     }
 
-    @SuppressWarnings("unchecked")
     @Override
-    public Tuple source(Object key, Object value) {
-        final AvroWrapper<IndexedRecord> wrapper = (AvroWrapper<IndexedRecord>) key;
-        final IndexedRecord record = wrapper.datum();
-
-        final Tuple result = Tuple.size(getSourceFields().size());
-        for(int i = 0; i < fieldTypes.length; i++) {
-            final Object val = fromAvro(fieldTypes[i], record.get(fieldTypes[i].pos));
-            result.set(i, val);
+    public boolean source(
+            FlowProcess<JobConf> process,
+            SourceCall<Object[], RecordReader<AvroWrapper<Record>, Writable>> call)
+            throws IOException {
+        final RecordReader<AvroWrapper<Record>, Writable> input = call
+                .getInput();
+        AvroWrapper<Record> wrapper = input.createKey();
+        if (!input.next(wrapper, input.createValue())) {
+            return false;
         }
-        return result;
-    }
 
-    private Object fromAvro(FieldType typeInfo, Object val) {
-        if(val == null) {
-            return null;
-        }
-        switch(typeInfo.type) {
-            case STRING:
-                return val.toString();
-            case FIXED:
-                return new BytesWritable(((GenericFixed)val).bytes());
-            case BYTES:
-                return bytesWritable((ByteBuffer)val);
-        }
-        return val;
-    }
-
-    private BytesWritable bytesWritable(ByteBuffer val) {
-        final byte[] data = new byte[val.remaining()];
-        val.get(data);
-        return new BytesWritable(data);
+        final Record record = wrapper.datum();
+        return read(call, record);
     }
 
     @Override
-    public void sinkInit(Tap tap, JobConf conf) throws IOException {
-        addAvroSerialization(conf);
+    public void sinkConfInit(
+            FlowProcess<JobConf> process,
+            Tap<JobConf, RecordReader<AvroWrapper<Record>, Writable>, OutputCollector<AvroWrapper<Record>, Writable>> tap,
+            JobConf conf) {
         conf.set(AvroJob.OUTPUT_SCHEMA, dataSchema.toString());
         conf.setOutputFormat(AvroOutputFormat.class);
         conf.setOutputKeyClass(AvroWrapper.class);
@@ -137,63 +128,67 @@ public class AvroScheme extends AvroSchemeBase {
 
     private void addAvroSerialization(JobConf conf) {
         // add AvroSerialization to io.serializations
-        final Collection<String> serializations = conf.getStringCollection("io.serializations");
+        final Collection<String> serializations = conf
+                .getStringCollection("io.serializations");
         if (!serializations.contains(AvroSerialization.class.getName())) {
             serializations.add(AvroSerialization.class.getName());
-            conf.setStrings("io.serializations", serializations.toArray(new String[serializations.size()]));
+            conf.setStrings("io.serializations",
+                    serializations.toArray(new String[serializations.size()]));
         }
+
     }
 
-    @SuppressWarnings("unchecked")
     @Override
-    public void sink(TupleEntry tupleEntry, OutputCollector output) throws IOException {
-        cached = (IndexedRecord)SpecificData.get().newRecord(cached, dataSchema);
-
-        final Fields sinkFields = getSinkFields();
-        for(int i = 0; i < fieldTypes.length; i++) {
-            final Comparable field = sinkFields.get(i);
-            final Object val = tupleEntry.get(field);
-            cached.put(fieldTypes[i].pos, toAvro(field, fieldTypes[i], val));
-        }
-        output.collect(new AvroWrapper<IndexedRecord>(cached), NullWritable.get());
+    public void sink(
+            FlowProcess<JobConf> process,
+            SinkCall<Object, OutputCollector<AvroWrapper<Record>, Writable>> call)
+            throws IOException {
+        Record record = write(call);
+        call.getOutput().collect(new AvroWrapper<Record>(record),
+                NullWritable.get());
     }
-    
-    private Object toAvro(Comparable field, FieldType typeInfo, Object val) throws IOException {
-        if(val == null) {
-            if(typeInfo.isNullable) {
-                return null;
-            } else {
-                throw new NullPointerException("Field " + field + " is not nullable");
+
+    private void retrieveSchema(FlowProcess<JobConf> flowProcess, Tap tap) {
+        try {
+            if (tap instanceof CompositeTap)
+                tap = (Tap) ((CompositeTap) tap).getChildTaps().next();
+            final String file = tap.getIdentifier();
+            Path p = new Path(file);
+            Configuration conf = new Configuration();
+            final FileSystem fs = p.getFileSystem(conf);
+            for (FileStatus status : fs.listStatus(p)) {
+                p = status.getPath();
+                // no need to open them all
+                InputStream stream = new BufferedInputStream(fs.open(p));
+                DataFileStream reader = new DataFileStream(stream,
+                        new ReflectDatumReader());
+                dataSchema = reader.getSchema();
+                retrieveSourceFields(tap);
+                return;
             }
+            throw new RuntimeException("no schema found in " + file);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
-        
-        switch(typeInfo.type) {
-            case STRING:
-                return val.toString();
-            case FIXED:
-                return SpecificData.get().createFixed(null, ((BytesWritable)val).getBytes(), typeInfo.schema);
-            case BYTES:
-                return ByteBuffer.wrap(((BytesWritable)val).getBytes());
-            case LONG:
-                return ((Number)val).longValue();
-            case INT:
-                return ((Number)val).intValue();
-            case DOUBLE:
-                return ((Number)val).doubleValue();
-            case FLOAT:
-                return ((Number)val).floatValue();
-        }
-        return val;
     }
 
-    private void writeObject(java.io.ObjectOutputStream out) throws IOException {
-        out.writeObject(this.fieldTypes);
-        out.writeUTF(this.dataSchema.toString());
+    private Fields retrieveSourceFields(Tap tap) {
+        if (!getSourceFields().isUnknown())
+            return getSourceFields();
+        final LinkedHashMap<String, FieldType> schemaFields = parseSchema(
+                dataSchema, ALLOWED_TYPES);
+        final Fields fields = fields(schemaFields);
+        setSourceFields(fields);
+        final Collection<FieldType> types = schemaFields.values();
+        fieldTypes = types.toArray(new FieldType[types.size()]);
+        return fields;
     }
 
-    private void readObject(java.io.ObjectInputStream in) throws IOException, ClassNotFoundException {
-        this.fieldTypes = (FieldType[])in.readObject();
-        this.dataSchema = readSchema(in);
+    public Fields retrieveSourceFields(FlowProcess<JobConf> flowProcess, Tap tap) {
+        if (dataSchema == null)
+            retrieveSchema(flowProcess, tap);
+
+        return getSourceFields();
     }
 
 }

@@ -22,6 +22,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
@@ -29,17 +30,17 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
 import org.apache.avro.Schema;
 import org.apache.avro.util.Utf8;
 import org.apache.hadoop.io.BytesWritable;
-import org.apache.hadoop.mapred.JobConf;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
-import cascading.flow.hadoop.HadoopFlowProcess;
-import cascading.tap.hadoop.Lfs;
+import cascading.flow.local.LocalFlowProcess;
+import cascading.tap.local.FileTap;
 import cascading.tuple.Fields;
 import cascading.tuple.Tuple;
 import cascading.tuple.TupleEntry;
@@ -47,25 +48,27 @@ import cascading.tuple.TupleEntryCollector;
 import cascading.tuple.TupleEntryIterator;
 
 /**
- * Class AvroSchemeTest
+ * Class LocalAvroSchemeTest
  */
-public class AvroSchemeTest {
+public class LocalAvroSchemeTest {
     @Rule
     public final TemporaryFolder tempDir = new TemporaryFolder();
 
     @Test
     public void testRoundTrip() throws Exception {
+        @SuppressWarnings("deprecation")
         final Schema schema = Schema.parse(getClass().getResourceAsStream(
                 "test1.avsc"));
-        final AvroScheme scheme = new AvroScheme(schema);
+        final LocalAvroScheme scheme = new LocalAvroScheme(schema);
 
         final Fields fields = new Fields("aBoolean", "anInt", "aLong",
                 "aDouble", "aFloat", "aBytes", "aFixed", "aNull", "aString",
                 "aList", "aMap");
 
-        final Lfs lfs = new Lfs(scheme, tempDir.getRoot().toString());
-        HadoopFlowProcess writeProcess = new HadoopFlowProcess(new JobConf());
-        final TupleEntryCollector collector = lfs.openForWrite(writeProcess);
+        final File root = tempDir.newFile("dummy");
+        final FileTap tap = new FileTap(scheme, root.getAbsolutePath());
+        LocalFlowProcess writeProcess = new LocalFlowProcess(new Properties());
+        final TupleEntryCollector collector = tap.openForWrite(writeProcess);
         List<String> aList = new ArrayList<String>();
         Map<String, Integer> aMap = new HashMap<String, Integer>();
         aMap.put("one", 1);
@@ -83,8 +86,8 @@ public class AvroSchemeTest {
                                 5, 6 }), null, null, aList, aMap)));
         collector.close();
 
-        HadoopFlowProcess readProcess = new HadoopFlowProcess(new JobConf());
-        final TupleEntryIterator iterator = lfs.openForRead(readProcess);
+        LocalFlowProcess readProcess = new LocalFlowProcess(new Properties());
+        final TupleEntryIterator iterator = tap.openForRead(readProcess);
         assertTrue(iterator.hasNext());
         final TupleEntry readEntry1 = iterator.next();
 
@@ -110,17 +113,19 @@ public class AvroSchemeTest {
 
     @Test
     public void testRoundTrip2() throws Exception {
+        @SuppressWarnings("deprecation")
         final Schema schema = Schema.parse(getClass().getResourceAsStream(
                 "test1.avsc"));
-        final AvroScheme scheme = new AvroScheme(schema);
+        LocalAvroScheme scheme = new LocalAvroScheme(schema);
 
         final Fields fields = new Fields("aBoolean", "anInt", "aLong",
                 "aDouble", "aFloat", "aBytes", "aFixed", "aNull", "aString",
                 "aList", "aMap");
 
-        Lfs lfs = new Lfs(scheme, tempDir.getRoot().toString());
-        HadoopFlowProcess writeProcess = new HadoopFlowProcess(new JobConf());
-        final TupleEntryCollector collector = lfs.openForWrite(writeProcess);
+        final File root = tempDir.newFile("dummy");
+        FileTap tap = new FileTap(scheme, root.getAbsolutePath());
+        LocalFlowProcess writeProcess = new LocalFlowProcess(new Properties());
+        final TupleEntryCollector collector = tap.openForWrite(writeProcess);
         List<String> aList = new ArrayList<String>();
         Map<String, Integer> aMap = new HashMap<String, Integer>();
         aMap.put("one", 1);
@@ -138,10 +143,10 @@ public class AvroSchemeTest {
                                 5, 6 }), null, null, aList, aMap)));
         collector.close();
 
-        HadoopFlowProcess readProcess = new HadoopFlowProcess(new JobConf());
-        lfs = new Lfs(new AvroScheme(), tempDir.getRoot().toString());
-
-        final TupleEntryIterator iterator = lfs.openForRead(readProcess);
+        LocalFlowProcess readProcess = new LocalFlowProcess(new Properties());
+        scheme = new LocalAvroScheme(schema);
+        tap = new FileTap(scheme, root.getAbsolutePath());
+        final TupleEntryIterator iterator = tap.openForRead(readProcess);
         assertTrue(iterator.hasNext());
         final TupleEntry readEntry1 = iterator.next();
 
@@ -169,13 +174,15 @@ public class AvroSchemeTest {
     public void listOrMapInsideListTest() throws Exception {
         final Schema schema = Schema.parse(getClass().getResourceAsStream(
                 "test4.avsc"));
-        final AvroScheme scheme = new AvroScheme(schema);
+        final LocalAvroScheme scheme = new LocalAvroScheme(schema);
 
         final Fields fields = new Fields("aListOfListOfInt", "aListOfMapToLong");
 
-        final Lfs lfs = new Lfs(scheme, tempDir.getRoot().toString());
-        HadoopFlowProcess writeProcess = new HadoopFlowProcess(new JobConf());
-        final TupleEntryCollector collector = lfs.openForWrite(writeProcess);
+        final FileTap FileTap = new FileTap(scheme, tempDir.newFile("dummy")
+                .toString());
+        LocalFlowProcess writeProcess = new LocalFlowProcess(new Properties());
+        final TupleEntryCollector collector = FileTap
+                .openForWrite(writeProcess);
 
         List<Map<String, Long>> aListOfMapToLong = new ArrayList<Map<String, Long>>();
         Map<String, Long> aMapToLong = new HashMap<String, Long>();
@@ -193,8 +200,8 @@ public class AvroSchemeTest {
                 aListOfListOfInt, aListOfMapToLong)));
         collector.close();
 
-        HadoopFlowProcess readProcess = new HadoopFlowProcess(new JobConf());
-        final TupleEntryIterator iterator = lfs.openForRead(readProcess);
+        LocalFlowProcess readProcess = new LocalFlowProcess(new Properties());
+        final TupleEntryIterator iterator = FileTap.openForRead(readProcess);
         assertTrue(iterator.hasNext());
         final TupleEntry readEntry1 = iterator.next();
 
@@ -215,13 +222,15 @@ public class AvroSchemeTest {
     public void listOrMapInsideMapTest() throws Exception {
         final Schema schema = Schema.parse(getClass().getResourceAsStream(
                 "test3.avsc"));
-        final AvroScheme scheme = new AvroScheme(schema);
+        final LocalAvroScheme scheme = new LocalAvroScheme(schema);
 
         final Fields fields = new Fields("aMapToListOfInt", "aMapToMapToLong");
 
-        final Lfs lfs = new Lfs(scheme, tempDir.getRoot().toString());
-        HadoopFlowProcess writeProcess = new HadoopFlowProcess(new JobConf());
-        final TupleEntryCollector collector = lfs.openForWrite(writeProcess);
+        final FileTap FileTap = new FileTap(scheme, tempDir.newFile("dummy")
+                .toString());
+        LocalFlowProcess writeProcess = new LocalFlowProcess(new Properties());
+        final TupleEntryCollector collector = FileTap
+                .openForWrite(writeProcess);
 
         Map<String, Map<String, Long>> aMapToMapToLong = new HashMap<String, Map<String, Long>>();
         Map<String, Long> aMapToLong = new HashMap<String, Long>();
@@ -239,8 +248,8 @@ public class AvroSchemeTest {
                 aMapToListOfInt, aMapToMapToLong)));
         collector.close();
 
-        HadoopFlowProcess readProcess = new HadoopFlowProcess(new JobConf());
-        final TupleEntryIterator iterator = lfs.openForRead(readProcess);
+        LocalFlowProcess readProcess = new LocalFlowProcess(new Properties());
+        final TupleEntryIterator iterator = FileTap.openForRead(readProcess);
         assertTrue(iterator.hasNext());
         final TupleEntry readEntry1 = iterator.next();
 
@@ -257,7 +266,7 @@ public class AvroSchemeTest {
 
     }
 
-    private void write(AvroScheme scheme, TupleEntryCollector collector,
+    private void write(LocalAvroScheme scheme, TupleEntryCollector collector,
             TupleEntry te) {
         collector.add(te.selectTuple(scheme.getSinkFields()));
     }
@@ -266,7 +275,7 @@ public class AvroSchemeTest {
     public void testSerialization() throws Exception {
         final Schema schema = Schema.parse(getClass().getResourceAsStream(
                 "test1.avsc"));
-        final AvroScheme expected = new AvroScheme(schema);
+        final LocalAvroScheme expected = new LocalAvroScheme(schema);
 
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         ObjectOutputStream oos = new ObjectOutputStream(bytes);
@@ -275,7 +284,7 @@ public class AvroSchemeTest {
 
         final ObjectInputStream iis = new ObjectInputStream(
                 new ByteArrayInputStream(bytes.toByteArray()));
-        final AvroScheme actual = (AvroScheme) iis.readObject();
+        final LocalAvroScheme actual = (LocalAvroScheme) iis.readObject();
 
         assertEquals(expected, actual);
     }
